@@ -88,7 +88,7 @@ The [Releases](https://github.com/unpins/zsh/releases) page has standalone binar
   ncurses, pcre2, gdbm, iconv — is static; `otool -L` confirms).
 
 - **Windows via Cosmopolitan.** mingw can't host zsh (no `fork`, job control, or
-  POSIX signals), so the Windows binary is built with `cosmocc` into an APE
-  PE32+. The same VFS core serves the embedded function tree; `fork`,
+  POSIX signals), so the Windows binary is built with `cosmocc` and apelinked to
+  a PE32+ `.exe`. The same VFS core serves the embedded function tree; `fork`,
   job-control, and the full `compinit` (all 1723 completions) are verified on a
   real Windows install. See `cosmo.nix`.
