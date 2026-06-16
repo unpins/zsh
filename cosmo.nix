@@ -56,6 +56,16 @@ let
       echo "==> wire unpins_zsh_init() into main()"
       sed -i '1i extern void unpins_zsh_init(void);' Src/main.c
       sed -i 's|return (zsh_main(argc, argv));|unpins_zsh_init();\n    return (zsh_main(argc, argv));|' Src/main.c
+
+      # Windows command lookup: catalog programs install as `<name>.exe`
+      # hardlinks (cmd.exe/PowerShell find them via PATHEXT), but Cosmopolitan
+      # does not append an executable suffix during path resolution, so a bare
+      # `ls` typed at the zsh prompt never resolves. The patch teaches zsh's PATH
+      # search (hashcmd) to retry a candidate with `.exe` when the bare name is
+      # missing, hashing the resolved `.exe` path so it reaches zexecve —
+      # mirroring native Windows shells and keeping a single on-disk name (no
+      # `ls` + `ls.exe` pair). `__COSMOCC__`-guarded, inert elsewhere.
+      patch -p1 < ${./findcmd-exe-lookup.patch}
     '';
 
     # Drop the NixOS-only global zshenv (dead /nix/store path stat'd every

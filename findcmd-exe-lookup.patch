@@ -1,0 +1,103 @@
+--- a/Src/exec.c
++++ b/Src/exec.c
+@@ -806,6 +806,27 @@
+ 	}
+ 	for (pp = path; *pp; pp++)
+ 	    if (!(*pp)[0] || ((*pp)[0] == '.' && !(*pp)[1])) {
++#ifdef __COSMOCC__
++		/* Relative ("." or empty) $path element: zsh never hashes  *
++		 * these, so this loop is the only resolution path.  On      *
++		 * Windows, retry arg0's ".exe" sibling so a bare `ls` finds *
++		 * `ls.exe` in the current directory.  iscom() guards the    *
++		 * retry; we only divert to the ".exe" name when it exists.  */
++		{
++		    size_t a0l = strlen(arg0);
++		    if (!(a0l >= 4 && !strcmp(arg0 + a0l - 4, ".exe")) &&
++			a0l + 4 < MAXCMDLEN) {
++			strcpy(buf, arg0);
++			strcat(buf, ".exe");
++			if (iscom(buf)) {
++			    ee = zexecve(buf, argv, newenvp);
++			    if (isgooderr(ee, *pp))
++				eno = ee;
++			    continue;
++			}
++		    }
++		}
++#endif
+ 		ee = zexecve(arg0, argv, newenvp);
+ 		if (isgooderr(ee, *pp))
+ 		    eno = ee;
+@@ -814,6 +835,23 @@
+ 		strucpy(&z, *pp);
+ 		*z++ = '/';
+ 		strcpy(z, arg0);
++#ifdef __COSMOCC__
++		/* Relative $path dir: candidate is *pp/arg0 in buf.  On     *
++		 * Windows, if that file is absent but its ".exe" sibling    *
++		 * exists, append ".exe" so the path that reaches zexecve    *
++		 * carries the suffix (mirrors the absolute-dir handling in  *
++		 * hashcmd()).  (z - buf) is the prefix length already       *
++		 * written; bound the append against MAXCMDLEN.              */
++		if (!iscom(buf)) {
++		    size_t cl = z - buf + strlen(arg0);
++		    if (!(cl >= 4 && !strcmp(buf + cl - 4, ".exe")) &&
++			cl + 4 < MAXCMDLEN) {
++			strcat(buf, ".exe");
++			if (!iscom(buf))
++			    buf[cl] = '\0';
++		    }
++		}
++#endif
+ 		ee = zexecve(buf, argv, newenvp);
+ 		if (isgooderr(ee, *pp))
+ 		    eno = ee;
+@@ -960,6 +998,18 @@
+     Cmdnam cn;
+     char *s, buf[PATH_MAX+1];
+     char **pq;
++#ifdef __COSMOCC__
++    /* On Windows, allow a bare name to resolve to its ".exe" sibling     *
++     * (mirroring PATHEXT): when DIR/arg0 is absent, retry DIR/arg0.exe.  *
++     * If the ".exe" variant is the one that exists, the resolved path    *
++     * must carry ".exe" all the way to zexecve, so we hash the node as   *
++     * a HASHED entry holding the full ".exe" path in cn->u.cmd rather    *
++     * than letting execute()/findcmd() rebuild DIR/arg0 from the bare    *
++     * name.                                                              */
++    int found_exe = 0;
++    size_t arg0len = strlen(arg0);
++    int has_exe = (arg0len >= 4 && !strcmp(arg0 + arg0len - 4, ".exe"));
++#endif
+
+     if (*arg0 == '/')
+         return NULL;
+@@ -973,12 +1023,29 @@
+ 	    strcpy(s, arg0);
+ 	    if (iscom(buf))
+ 		break;
++#ifdef __COSMOCC__
++	    if (!has_exe && (s - buf) + arg0len + 4 <= PATH_MAX) {
++		strcat(buf, ".exe");
++		if (iscom(buf)) {
++		    found_exe = 1;
++		    break;
++		}
++	    }
++#endif
+ 	}
+
+     if (!*pp)
+ 	return NULL;
+
+     cn = (Cmdnam) zshcalloc(sizeof *cn);
++#ifdef __COSMOCC__
++    if (found_exe) {
++	cn->node.flags = HASHED;
++	cn->u.cmd = ztrdup(buf);
++	cmdnamtab->addnode(cmdnamtab, ztrdup(arg0), cn);
++	return cn;
++    }
++#endif
+     cn->node.flags = 0;
+     cn->u.name = pp;
+     cmdnamtab->addnode(cmdnamtab, ztrdup(arg0), cn);
