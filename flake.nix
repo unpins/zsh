@@ -16,9 +16,10 @@
   #     triggers a GCC ICE (tree-object-size.cc, check_for_plus_in_loops)
   #     compiling Src/sort.c at -O2 under musl. Drop fortify to dodge the
   #     compiler bug — no functional change.
-  #   - embedFallbackTerminfo on ncurses: zsh's zle/terminfo modules look up
-  #     terminal capabilities via ncurses; without baked fallbacks the binary
-  #     reads host /usr/share/terminfo (same fix dash uses).
+  #   - ncurses fallback-terminfo (zsh's zle/terminfo modules look up terminal
+  #     capabilities via ncurses; baked fallbacks avoid reading host
+  #     /usr/share/terminfo) is now applied centrally to every engine ncurses in
+  #     native-overlay/ncurses.nix — no per-package override (same for dash).
   #   - ALL modules forced into the static link (config.modules `link=no` →
   #     `link=static`) + --enable-gdbm; otherwise pkgsStatic ships a shell
   #     missing mathfunc, pcre, regex, system, zpty, stat, … (everything whose
@@ -46,12 +47,11 @@
       # The native static zsh with every module linked in. Used both as the
       # binary we inject the VFS into AND (un-pruned) as the source of the
       # runtime tree staged into the embed.
+      # Fallback terminfo is baked centrally for every engine ncurses, linux +
+      # darwin (native-overlay/ncurses.nix), so p.ncurses already carries it.
       zshBase = pkgs:
-        let
-          p = pkgs.pkgsStatic;
-          ncursesFB = unpins-lib.lib.embedFallbackTerminfo p.ncurses;
-        in
-        (p.zsh.override { ncurses = ncursesFB; }).overrideAttrs (o: {
+        let p = pkgs.pkgsStatic;
+        in (p.zsh.override { ncurses = p.ncurses; }).overrideAttrs (o: {
           hardeningDisable = (o.hardeningDisable or [ ]) ++ [ "fortify" "fortify3" ];
 
           # Optional libs zsh links against. Two modules are gated behind both a
@@ -77,6 +77,22 @@
               (o.configureFlags or [ ]))
             ++ [ "--enable-gdbm" ]
             ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux "--enable-cap";
+
+          # zsh's configure locates the system signal.h and errno.h by greping a
+          # REAL on-disk header for the SIG<n> / E<name> macros (it feeds those
+          # files to signames*.awk / errnames*.awk to generate the name tables).
+          # The unpin-llvm engine resolves <signal.h>/<errno.h> into its embedded
+          # VFS sysroot, so the probe sees only VFS paths plus the musl
+          # /usr/include fallback list — none exist as files in the sandbox — and
+          # aborts "SIGNAL/ERROR MACROS NOT FOUND". Pre-seed both cache vars with
+          # musl's real bits/{signal,errno}.h (the path a non-engine CPP would
+          # have resolved to). Linux-only: darwin's engine uses the host SDK (real
+          # headers on disk), Windows is cosmo.nix.
+          preConfigure = (o.preConfigure or "")
+            + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+            export zsh_cv_path_signal_h=${pkgs.lib.getDev p.musl}/include/bits/signal.h
+            export zsh_cv_path_errno_h=${pkgs.lib.getDev p.musl}/include/bits/errno.h
+          '';
 
           # Force ALL modules into the static binary (config.modules edit is the
           # upstream-supported knob, zsh INSTALL). Verified: all 38 modules
@@ -183,6 +199,12 @@
     unpins-lib.lib.mkStandaloneFlake {
       inherit self;
       name = "zsh";
+
+      # Build via the unpin-llvm engine + emit a bitcode multicall module.
+      engine = "unpin-llvm";
+      multicall = {
+        programs = [{ name = "zsh"; }];
+      };
       license = "MIT";
 
       smoke = [ "-f" "-c" "echo unpins-smoke-ok" ];
