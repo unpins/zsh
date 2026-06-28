@@ -195,6 +195,7 @@
           make -C Src -j''${NIX_BUILD_CORES:-1}
         '';
       });
+      cosmoMod = import ./cosmo.nix { inherit unpins-lib; };
     in
     unpins-lib.lib.mkStandaloneFlake {
       inherit self;
@@ -212,26 +213,26 @@
 
       # Windows via Cosmopolitan (mingw is a dead end for zsh — needs
       # fork/job-control/signals). See cosmo.nix.
-      windowsBuild = import ./cosmo.nix { inherit unpins-lib; };
+      windowsBuild = pkgs: (cosmoMod pkgs).base;
 
-      build = pkgs:
-        let
-          vfsDrv = injectVfs pkgs (zshBase pkgs);
-        in
-        unpins-lib.lib.withUnpinEmbed pkgs
-          {
-            primary = "zsh";
-            man = true;
-            manRoot = "${vfsDrv.man}";
-            # Stage the function + script trees at the ZIP root (functions/,
-            # scripts/) — the mount-relative paths $fpath/UNPIN_VFS_ROOT use.
-            runtimeStage = ''
-              mkdir -p "$__unpin_stage/functions" "$__unpin_stage/scripts"
-              cp -a ${vfsDrv}/share/zsh/*/functions/. "$__unpin_stage/functions/"
-              cp -a ${vfsDrv}/share/zsh/*/scripts/.   "$__unpin_stage/scripts/" 2>/dev/null || true
-              chmod -R u+w "$__unpin_stage"
-            '';
-          }
-          vfsDrv;
+      # PRISTINE VFS zsh base (no embed); the function/script trees + man are
+      # embedded once, post-build, via runtimeEmbed → unpinEmbedWrap (the single
+      # embed path). Windows (cosmo) provides its own base + embed from cosmo.nix.
+      build = pkgs: injectVfs pkgs (zshBase pkgs);
+      runtimeEmbed = {
+        native = pkgs: base: {
+          man = true;
+          manRoot = "${base.man}";
+          # Stage the function + script trees at the ZIP root (functions/,
+          # scripts/) — the mount-relative paths $fpath/UNPIN_VFS_ROOT use.
+          runtimeStage = ''
+            mkdir -p "$__unpin_stage/functions" "$__unpin_stage/scripts"
+            cp -a ${base}/share/zsh/*/functions/. "$__unpin_stage/functions/"
+            cp -a ${base}/share/zsh/*/scripts/.   "$__unpin_stage/scripts/" 2>/dev/null || true
+            chmod -R u+w "$__unpin_stage"
+          '';
+        };
+        windows = pkgs: base: (cosmoMod pkgs).embed;
+      };
     };
 }

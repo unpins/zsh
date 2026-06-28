@@ -144,13 +144,14 @@ let
     };
   });
 in
-# One pack: stage the function+script trees at the ZIP root (the mount-relative
-# paths $fpath/UNPIN_VFS_ROOT use) and embed the cosmo build's own man. The
-# postFixup runs after apelink, so it appends to zsh.exe (withUnpinEmbed handles
-# the `.exe` suffix).
-unpins-lib.lib.withUnpinEmbed pkgs
-  {
-    primary = "zsh";
+# The PRISTINE cosmo zsh base + the embed spec consumed by mkStandaloneFlake's
+# runtimeEmbed.windows → unpinEmbedWrap (the single embed path; it appends the
+# container at EOF after apelink and handles the `.exe` suffix): stage the
+# function+script trees at the ZIP root (the mount-relative paths
+# $fpath/UNPIN_VFS_ROOT use) and embed the cosmo build's own man.
+{
+  base = cosmoZsh;
+  embed = {
     man = true;
     manRoot = "${cosmoZsh.man or cosmoZsh}";
     runtimeStage = ''
@@ -159,5 +160,5 @@ unpins-lib.lib.withUnpinEmbed pkgs
       cp -a ${cosmoZsh}/share/zsh/*/scripts/.   "$__unpin_stage/scripts/" 2>/dev/null || true
       chmod -R u+w "$__unpin_stage"
     '';
-  }
-  cosmoZsh
+  };
+}
