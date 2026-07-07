@@ -25,20 +25,27 @@
   #     missing mathfunc, pcre, regex, system, zpty, stat, … (everything whose
   #     .mdd says `link=dynamic`).
   #   - unpin-vfs: zsh's function/completion tree (share/zsh/<ver>/functions +
-  #     scripts) is embedded in the binary's EOF ZIP and served by the VFS
-  #     core via `ld --wrap`; $fpath is pointed at the mount (FPATH env, set in
-  #     unpins_zsh_init.c). compinit globs $fpath, so the VFS runs in DIRS mode
-  #     (opendir/readdir). Without this the shell runs but completion/autoload
-  #     break in a self-contained binary.
+  #     scripts) is embedded in the binary's EOF ZIP and served by the VFS core
+  #     interposing zsh's libc file calls; $fpath is pointed at the mount (FPATH
+  #     env, set in unpins_zsh_init.c). compinit globs $fpath, so the VFS runs in
+  #     DIRS mode (opendir/readdir). Without this the shell runs but
+  #     completion/autoload break in a self-contained binary.
+  #
+  # VFS interception — ONE scheme, Linux AND macOS: vfs.c's shims front the
+  # program's open/stat/lstat/access/opendir/readdir/closedir/fopen. Linux
+  # engages them with `ld --wrap` (NIX_LDFLAGS); macOS, where ld64 has no
+  # --wrap, DEFINES those symbols so the shim definitions shadow libSystem and
+  # reaches the real calls via dlsym(RTLD_NEXT, …) — nix-lib's dns-fallback
+  # pattern. No objcopy/relink; both compose with the engine's -flto bitcode.
+  # Windows (cosmo) is a separate build that keeps `ld --wrap` (cosmo supports
+  # it). See vfs.c's platform blocks and injectVfs.
   #
   # Targets (all built; the runtime tree + 30–38 modules verified on each):
   #   - Linux (static-musl, every arch): $fpath points at the embedded mount,
   #     compinit/autoload served from /proc/self/exe (strace: 0 /nix/store
-  #     reads), all 38 modules linked. x86_64 ~4.82 MB.
-  #   - macOS (Mach-O, libSystem-only): no `ld --wrap`, so zsh's own objects'
-  #     libc file refs are rewritten to the VFS shims with llvm-objcopy
-  #     --redefine-sym + relink (mirrors vim's darwin branch). cap/libcap is
-  #     Linux-only and stays a stub here, as it should.
+  #     reads), all 38 modules linked. x86_64 ~4.82 MB. cap/libcap enabled.
+  #   - macOS (Mach-O, libSystem-only): same interposition via define + dlsym.
+  #     cap/libcap is Linux-only and stays a stub here, as it should.
   #   - Windows (Cosmopolitan APE): see cosmo.nix — mingw is a dead end for zsh
   #     (needs fork/job-control/signals), so the Windows binary is cosmocc-built
   #     with the modules cosmo can back and the same VFS core.
@@ -71,12 +78,22 @@
           # bakes a dead /nix/store path the shell stats at every startup.
           buildInputs = (o.buildInputs or [ ]) ++ [ p.gdbm ]
             ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux p.libcap;
+          #   - --disable-dynamic (darwin): link EVERY module statically into the
+          #     zsh binary instead of shipping loadable .so's dlopen'd from
+          #     MODULE_PATH at runtime. Linux static-musl can't dlopen so its
+          #     configure forces this implicitly; macOS CAN dlopen (libSystem is
+          #     dynamic), so without the flag zsh builds zsh/zle/zsh/pcre/… as
+          #     .so under $out/lib/zsh and bakes MODULE_PATH — a live /nix/store
+          #     runtime dep, and the shell breaks the moment that path is scrubbed
+          #     or absent. --disable-dynamic makes macOS match Linux: one
+          #     self-contained binary, zmodload resolving to the built-ins.
           configureFlags =
             (builtins.filter
               (f: !(pkgs.lib.hasPrefix "--enable-zshenv=" f))
               (o.configureFlags or [ ]))
             ++ [ "--enable-gdbm" ]
-            ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux "--enable-cap";
+            ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux "--enable-cap"
+            ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isDarwin "--disable-dynamic";
 
           # zsh's configure locates the system signal.h and errno.h by greping a
           # REAL on-disk header for the SIG<n> / E<name> macros (it feeds those
@@ -102,9 +119,10 @@
           '';
         });
 
-      # Layer the unpin-vfs core onto the binary: copy sources, route zsh's
-      # libc file calls through the wrappers (ld --wrap), pin $fpath at the
-      # mount. Mirrors vim's injectVfs (Linux branch only for now).
+      # Layer the unpin-vfs core onto the binary: copy sources, front zsh's libc
+      # file calls with the VFS shims, pin $fpath at the mount. One scheme on
+      # both platforms (Linux `--wrap`, macOS define+dlsym — see the header
+      # note); the VFS objects just have to be on the link line either way.
       #
       # zsh's real build runs through a recursive `make -f Makemod` that passes
       # CC/CFLAGS/EXTRA_LDFLAGS on the sub-make command line (those override any
@@ -112,23 +130,18 @@
       # neither appended compile rules nor an `EXTRA_LDFLAGS +=` survive there.
       # Two robustness moves: pre-compile the VFS objects in preBuild (they just
       # have to exist as files; EXTRAZSHOBJS, concatenated into Makemod, places
-      # them on the link line), and inject the `--wrap` flags via NIX_LDFLAGS
-      # (the nix cc-wrapper applies them to the final link regardless of the
-      # makefile) — exported in preBuild, AFTER configure, so the conftest links
-      # that have no vfs.o don't hit an undefined __wrap_open.
+      # them on the link line), and on Linux inject the `--wrap` flags via
+      # NIX_LDFLAGS (the nix cc-wrapper applies them to the final link regardless
+      # of the makefile) — exported in preBuild, AFTER configure, so the conftest
+      # links that have no vfs.o don't hit an undefined __wrap_open.
       injectVfs = pkgs: drv: drv.overrideAttrs (old:
         let
           lib = pkgs.lib;
           isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
-          # macOS has no `ld --wrap`; rewrite zsh's own objects' libc file refs
-          # to the VFS shims with llvm-objcopy --redefine-sym (GNU objcopy can't
-          # touch Mach-O), then relink. buildPackages so cross-darwin uses a
-          # tool that runs on the build host. Mirrors vim's injectVfs.
-          objcopy = "${pkgs.buildPackages.llvm}/bin/llvm-objcopy";
         in
         {
         postPatch = (old.postPatch or "") + ''
-          echo "==> inject unpin-vfs core (vfs.c + miniz.c, routed via ld --wrap)"
+          echo "==> inject unpin-vfs core (vfs.c + miniz.c)"
           cp ${./vfs.c}            Src/vfs.c
           cp ${./vfs.h}            Src/vfs.h
           cp ${./miniz.c}          Src/miniz.c
@@ -163,37 +176,13 @@
           export NIX_LDFLAGS="$NIX_LDFLAGS --wrap=open --wrap=stat --wrap=lstat --wrap=access --wrap=opendir --wrap=readdir --wrap=closedir --wrap=fopen"
         '';
 
-        # macOS: zsh is built+linked once already (real libc refs, with our
-        # vfs.o/miniz.o/unpin_zstd.o/unpins_zsh_init.o present via EXTRAZSHOBJS
-        # but only reached through the redefined refs). Now rewrite every zsh
-        # object's libc file references to the _unpinvfs_* shims and relink.
-        # The four VFS objects are left untouched so their own REAL_* calls
-        # still resolve to libc. x86_64-darwin carries the $INODE64 ABI suffix
-        # on stat/lstat/opendir/readdir; aarch64-darwin uses the plain names —
-        # list both (--redefine-sym no-ops on absent symbols). Same wrap set as
-        # Linux (open/stat/lstat/access/opendir/readdir/closedir/fopen), proven
-        # sufficient for compinit's fpath glob + autoload.
-        postBuild = (old.postBuild or "") + lib.optionalString isDarwin ''
-          echo "==> macOS: redefine zsh's libc file refs -> _unpinvfs_*"
-          for o in $(find Src -name '*.o'); do
-            case "$o" in
-              */vfs.o|*/miniz.o|*/unpin_zstd.o|*/unpins_zsh_init.o) continue ;;
-            esac
-            ${objcopy} \
-              --redefine-sym _open=_unpinvfs_open \
-              --redefine-sym _access=_unpinvfs_access \
-              --redefine-sym _fopen=_unpinvfs_fopen \
-              --redefine-sym _closedir=_unpinvfs_closedir \
-              --redefine-sym '_stat$INODE64=_unpinvfs_stat'       --redefine-sym _stat=_unpinvfs_stat \
-              --redefine-sym '_lstat$INODE64=_unpinvfs_lstat'     --redefine-sym _lstat=_unpinvfs_lstat \
-              --redefine-sym '_opendir$INODE64=_unpinvfs_opendir' --redefine-sym _opendir=_unpinvfs_opendir \
-              --redefine-sym '_readdir$INODE64=_unpinvfs_readdir' --redefine-sym _readdir=_unpinvfs_readdir \
-              "$o"
-          done
-          echo "==> macOS: relink zsh against the rewritten objects"
-          rm -f Src/zsh
-          make -C Src -j''${NIX_BUILD_CORES:-1}
-        '';
+        # macOS needs NO extra link step: vfs.c DEFINES open/stat/… (see vfs.c's
+        # macOS block), and a definition in a linked object shadows the libSystem
+        # import for every reference — so zsh binds to our shims and the real
+        # calls go through dlsym(RTLD_NEXT, …). The old objcopy --redefine-sym +
+        # relink pass is gone; it couldn't touch the engine's -flto bitcode
+        # objects anyway. One scheme, both platforms — only the Linux `--wrap`
+        # above differs (ld64 has no --wrap; the define shim replaces it).
       });
       cosmoMod = import ./cosmo.nix { inherit unpins-lib; };
     in
@@ -205,6 +194,15 @@
       engine = "unpin-llvm";
       multicall = {
         programs = [{ name = "zsh"; }];
+        # zsh's configure bakes its own $out into the binary's default
+        # module_path / fpath / scriptpath constants, and into a handful of
+        # shipped function files (run-help's HELPDIR, autoloaded-function
+        # shebangs). Every module is statically linked and $fpath is repointed
+        # at the VFS mount, so those baked paths are DEAD — but Nix still counts
+        # them as runtime refs and drags the base zsh's closure. Scrub the
+        # rodata constants here (unpinEmbedWrap → remove-references-to); the
+        # function-file copies are sanitised in runtimeStage below.
+        removeReferences = [ "zsh-static" ];
       };
       license = "MIT";
 
@@ -225,11 +223,21 @@
           manRoot = "${base.man}";
           # Stage the function + script trees at the ZIP root (functions/,
           # scripts/) — the mount-relative paths $fpath/UNPIN_VFS_ROOT use.
+          # Then sanitise the base zsh's own $out out of the staged files: a
+          # few shipped functions bake it into shebangs / HELPDIR defaults, and
+          # those strings would ride into the EOF ZIP as live store refs. They
+          # point at paths that don't exist in the portable binary (dead), so
+          # rewrite them to the mount root — keeps behaviour, drops the ref.
+          # `sed` without `-i` so it's portable across the GNU/BSD build hosts.
           runtimeStage = ''
             mkdir -p "$__unpin_stage/functions" "$__unpin_stage/scripts"
             cp -a ${base}/share/zsh/*/functions/. "$__unpin_stage/functions/"
             cp -a ${base}/share/zsh/*/scripts/.   "$__unpin_stage/scripts/" 2>/dev/null || true
             chmod -R u+w "$__unpin_stage"
+            find "$__unpin_stage" -type f | while read -r __f; do
+              sed "s#${base}#/__unpins_zshruntime__#g" "$__f" > "$__f.__unpin_tmp" \
+                && mv "$__f.__unpin_tmp" "$__f"
+            done
           '';
         };
         windows = pkgs: base: (cosmoMod pkgs).embed;

@@ -8,9 +8,11 @@
  *
  * A matched open() inflates one entry and hands back a real, seekable fd; the
  * mechanism differs only in how each OS makes that fd:
- *   - Linux  : memfd_create. perl-style open/stat/... routed via `ld --wrap`.
- *   - macOS  : mkstemp + immediate unlink (no memfd). libc symbols renamed with
- *              objcopy --redefine-sym; this TU keeps the real libc.
+ *   - Linux  : memfd_create. open/stat/... fronted via `ld --wrap`.
+ *   - macOS  : mkstemp + immediate unlink (no memfd). Same interposition scheme,
+ *              minus --wrap (ld64 lacks it): this TU DEFINES open/stat/... so its
+ *              definitions shadow libSystem, and reaches the real ones through
+ *              dlsym(RTLD_NEXT, …). No objcopy/relink — composes with -flto.
  *   - Windows: materialise to a temp file once (cached by index) and delegate
  *              to the program's own real win32_* (wrapped via mingw `ld --wrap`).
  *
@@ -474,6 +476,9 @@ static int write_all(int fd, const unsigned char *data, size_t len) {
 #if defined(__APPLE__)
 /* macOS: no memfd -- temp file, unlink immediately => anonymous seekable fd. */
 #include <stdio.h>
+#include <dlfcn.h>
+#include <unistd.h>
+#include <sys/stat.h>
 static int anon_fd(const unsigned char *data, size_t len) {
     const char *t = getenv("TMPDIR");
     if (!t || !*t) t = "/tmp/";
@@ -487,23 +492,80 @@ static int anon_fd(const unsigned char *data, size_t len) {
     if (write_all(fd, data, len) < 0) { close(fd); return -1; }
     return fd;
 }
-#  define OPEN_FN    unpinvfs_open
-#  define STAT_FN    unpinvfs_stat
-#  define LSTAT_FN   unpinvfs_lstat
-#  define ACCESS_FN  unpinvfs_access
-#  define REAL_OPEN(p, ...)   open((p), __VA_ARGS__)
-#  define REAL_STAT(p, s)     stat((p), (s))
-#  define REAL_LSTAT(p, s)    lstat((p), (s))
-#  define REAL_ACCESS(p, m)   access((p), (m))
+/* macOS interposition — the SAME scheme as Linux (this TU's shims front the
+ * program's libc file calls), minus the one thing ld64 lacks: `--wrap`. Rather
+ * than the linker renaming the program's refs, this TU DEFINES the libc entry
+ * points (open/stat/…); a definition in a linked object shadows the libSystem
+ * import for every in-binary reference, so NO objcopy-rename + relink pass is
+ * needed and it composes with the engine's -flto bitcode (which objcopy can't
+ * touch). The real libSystem entry points are reached through
+ * dlsym(RTLD_NEXT, …) — exactly nix-lib's dns-fallback pattern for getaddrinfo.
+ * x86_64 carries the $INODE64 ABI suffix on the inode-bearing calls; the SDK
+ * headers asm-rename OUR definitions to the matching symbol automatically, so
+ * only the dlsym lookups have to spell the suffix. */
+#if defined(__x86_64__)
+#  define UVFS_INO64 "$INODE64"
+#else
+#  define UVFS_INO64 ""
+#endif
+static int real_open(const char *p, int flags, ...) {
+    typedef int (*fn_t)(const char *, int, ...);
+    static fn_t fn; if (!fn) fn = (fn_t)dlsym(RTLD_NEXT, "open");
+    va_list ap; va_start(ap, flags); int mode = va_arg(ap, int); va_end(ap);
+    return fn(p, flags, mode);
+}
+static int real_stat(const char *p, struct stat *st) {
+    typedef int (*fn_t)(const char *, struct stat *);
+    static fn_t fn; if (!fn) fn = (fn_t)dlsym(RTLD_NEXT, "stat" UVFS_INO64);
+    return fn(p, st);
+}
+static int real_lstat(const char *p, struct stat *st) {
+    typedef int (*fn_t)(const char *, struct stat *);
+    static fn_t fn; if (!fn) fn = (fn_t)dlsym(RTLD_NEXT, "lstat" UVFS_INO64);
+    return fn(p, st);
+}
+static int real_access(const char *p, int mode) {
+    typedef int (*fn_t)(const char *, int);
+    static fn_t fn; if (!fn) fn = (fn_t)dlsym(RTLD_NEXT, "access");
+    return fn(p, mode);
+}
+#  define OPEN_FN    open
+#  define STAT_FN    stat
+#  define LSTAT_FN   lstat
+#  define ACCESS_FN  access
+#  define REAL_OPEN(p, ...)   real_open((p), __VA_ARGS__)
+#  define REAL_STAT(p, s)     real_stat((p), (s))
+#  define REAL_LSTAT(p, s)    real_lstat((p), (s))
+#  define REAL_ACCESS(p, m)   real_access((p), (m))
 #  ifdef UNPIN_VFS_DIRS
-#    define OPENDIR_FN  unpinvfs_opendir
-#    define READDIR_FN  unpinvfs_readdir
-#    define CLOSEDIR_FN unpinvfs_closedir
-#    define FOPEN_FN    unpinvfs_fopen
-#    define REAL_OPENDIR(p)   opendir((p))
-#    define REAL_READDIR(d)   readdir((d))
-#    define REAL_CLOSEDIR(d)  closedir((d))
-#    define REAL_FOPEN(p, m)  fopen((p), (m))
+static DIR *real_opendir(const char *p) {
+    typedef DIR *(*fn_t)(const char *);
+    static fn_t fn; if (!fn) fn = (fn_t)dlsym(RTLD_NEXT, "opendir" UVFS_INO64);
+    return fn(p);
+}
+static struct dirent *real_readdir(DIR *d) {
+    typedef struct dirent *(*fn_t)(DIR *);
+    static fn_t fn; if (!fn) fn = (fn_t)dlsym(RTLD_NEXT, "readdir" UVFS_INO64);
+    return fn(d);
+}
+static int real_closedir(DIR *d) {
+    typedef int (*fn_t)(DIR *);
+    static fn_t fn; if (!fn) fn = (fn_t)dlsym(RTLD_NEXT, "closedir");
+    return fn(d);
+}
+static FILE *real_fopen(const char *p, const char *m) {
+    typedef FILE *(*fn_t)(const char *, const char *);
+    static fn_t fn; if (!fn) fn = (fn_t)dlsym(RTLD_NEXT, "fopen");
+    return fn(p, m);
+}
+#    define OPENDIR_FN  opendir
+#    define READDIR_FN  readdir
+#    define CLOSEDIR_FN closedir
+#    define FOPEN_FN    fopen
+#    define REAL_OPENDIR(p)   real_opendir((p))
+#    define REAL_READDIR(d)   real_readdir((d))
+#    define REAL_CLOSEDIR(d)  real_closedir((d))
+#    define REAL_FOPEN(p, m)  real_fopen((p), (m))
 #  endif
 #else
 /* Linux: a real anonymous kernel fd. */

@@ -76,16 +76,26 @@ The [Releases](https://github.com/unpins/zsh/releases) page has standalone binar
   `share/zsh/<ver>/functions` + `scripts` tree is packed into a ZIP appended at
   the binary's EOF and served by the shared
   [unpin-vfs](https://github.com/unpins/unpin) core; `$fpath` is pointed at the
-  in-binary mount. On Linux the libc file calls are routed through the VFS with
-  `ld --wrap`; on macOS (no `--wrap` for Mach-O) zsh's own objects are rewritten
-  with `llvm-objcopy --redefine-sym` and relinked. `strace` shows zero
+  in-binary mount. The VFS core fronts zsh's `open`/`stat`/`opendir`/`readdir`/…
+  with the same shims on **every** platform — one scheme, differing only in how
+  the shims are engaged: on Linux via the linker's `ld --wrap`; on macOS, where
+  ld64 has no `--wrap`, the shims **define** the libc entry points (a definition
+  in a linked object shadows the libSystem import) and reach the real calls
+  through `dlsym(RTLD_NEXT, …)` — the same interposition pattern nix-lib's
+  DNS fallback uses, and one that composes with the engine's `-flto` bitcode (an
+  objcopy symbol-rename can't touch bitcode `.o`). `strace` shows zero
   `/nix/store` reads during `compinit`.
 
 - **Static linking, every target.** Linux is static-musl (every arch); the
   binary carries a curated ncurses terminfo fallback so `zle`/`terminfo` work
-  with no `/usr/share/terminfo` on the host and the binary keeps no
-  `/nix/store` reference. macOS links only `libSystem` (everything else —
-  ncurses, pcre2, gdbm, iconv — is static; `otool -L` confirms).
+  with no `/usr/share/terminfo` on the host. The runtime closure is the binary
+  alone — zsh's configure bakes its own `$out` into the default
+  module_path/fpath/scriptpath and a few shipped functions, but every module is
+  static and `$fpath` is repointed at the mount, so those paths are dead; they
+  are scrubbed (`remove-references-to` on the constants, a `sed` pass on the
+  embedded function files) leaving `nix-store -qR` = the output itself. macOS
+  links only `libSystem` (everything else — ncurses, pcre2, gdbm, iconv — is
+  static; `otool -L` confirms).
 
 - **Windows via Cosmopolitan.** mingw can't host zsh (no `fork`, job control, or
   POSIX signals), so the Windows binary goes through cosmo. The same VFS core
