@@ -202,7 +202,11 @@
         # them as runtime refs and drags the base zsh's closure. Scrub the
         # rodata constants here (unpinEmbedWrap → remove-references-to); the
         # function-file copies are sanitised in runtimeStage below.
-        removeReferences = [ "zsh-static" ];
+        # Two spellings because the base derivation is named per platform:
+        # pkgsStatic gives `zsh-static-<ver>`, the cosmo cross gives
+        # `zsh-x86_64-unknown-cosmo-gnu-<ver>`. The native pattern alone left the
+        # .exe holding a live ref to its own base (measured: refs 1 → 0).
+        removeReferences = [ "zsh-static" "zsh-x86_64-unknown-cosmo" ];
       };
       license = "MIT";
 
