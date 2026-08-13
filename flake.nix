@@ -51,6 +51,7 @@
   #     with the modules cosmo can back and the same VFS core.
   outputs = { self, unpins-lib }:
     let
+      ulib = unpins-lib.lib;
       # The native static zsh with every module linked in. Used both as the
       # binary we inject the VFS into AND (un-pruned) as the source of the
       # runtime tree staged into the embed.
@@ -142,13 +143,7 @@
         {
         postPatch = (old.postPatch or "") + ''
           echo "==> inject unpin-vfs core (vfs.c + miniz.c)"
-          cp ${./vfs.c}            Src/vfs.c
-          cp ${./vfs.h}            Src/vfs.h
-          cp ${./miniz.c}          Src/miniz.c
-          cp ${./miniz.h}          Src/miniz.h
-          cp ${./unpin_zstd.c}     Src/unpin_zstd.c
-          cp ${./unpin_zstd.h}     Src/unpin_zstd.h
-          cp ${./zstddeclib.c}     Src/zstddeclib.c
+          cp ${ulib.vfsCore}/*.c ${ulib.vfsCore}/*.h Src/
           cp ${./unpins_zsh_init.c} Src/unpins_zsh_init.c
 
           echo "==> wire unpins_zsh_init() into main()"
@@ -160,7 +155,11 @@
         # config.modules edit.
         preBuild = (old.preBuild or "") + ''
           echo "==> pre-compile unpin-vfs objects (Makemod regen drops appended rules)"
-          UNPIN_VFS_DEFS="-DUNPIN_VFS_DIRS -DUNPIN_VFS_SELF -DUNPIN_VFS_ROOT=\"/__unpins_zshruntime__/\""
+          # -DUNPIN_VFS_DLSYM (darwin): pick the binding where vfs.c DEFINES the
+          # libc entry points and reaches the real ones through dlsym(RTLD_NEXT).
+          # It is not the default on macOS — bare __APPLE__ selects the rename
+          # binding, which wants an IR-rewrite pass zsh has no equivalent of.
+          UNPIN_VFS_DEFS="-DUNPIN_VFS_DIRS -DUNPIN_VFS_SELF -DUNPIN_VFS_ROOT=\"/__unpins_zshruntime__/\"${lib.optionalString isDarwin " -DUNPIN_VFS_DLSYM"}"
           MINIZ_DEFS="-DMINIZ_USE_ZSTD -DMINIZ_NO_TIME -DMINIZ_NO_ARCHIVE_WRITING_APIS -DMINIZ_NO_ZLIB_APIS -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES"
           ( cd Src
             $CC -O2 -c vfs.c            $UNPIN_VFS_DEFS $MINIZ_DEFS -o vfs.o
@@ -176,8 +175,8 @@
           export NIX_LDFLAGS="$NIX_LDFLAGS --wrap=open --wrap=stat --wrap=lstat --wrap=access --wrap=opendir --wrap=readdir --wrap=closedir --wrap=fopen"
         '';
 
-        # macOS needs NO extra link step: vfs.c DEFINES open/stat/… (see vfs.c's
-        # macOS block), and a definition in a linked object shadows the libSystem
+        # macOS needs NO extra link step: under -DUNPIN_VFS_DLSYM vfs.c DEFINES
+        # open/stat/…, and a definition in a linked object shadows the libSystem
         # import for every reference — so zsh binds to our shims and the real
         # calls go through dlsym(RTLD_NEXT, …). The old objcopy --redefine-sym +
         # relink pass is gone; it couldn't touch the engine's -flto bitcode
@@ -210,8 +209,13 @@
       };
       license = "MIT";
 
-      smoke = [ "-f" "-c" "echo unpins-smoke-ok" ];
-      smokePattern = "unpins-smoke-ok";
+      # `-f` skips every rc file, so the old `echo` smoke ran without ever
+      # touching $fpath — green with the VFS unbound. This CALLS an autoloaded
+      # function, which is the only part that reads the embedded tree: `autoload`
+      # alone just marks the name (`whence -w` then answers "function" even when
+      # the file was never found — measured, with fpath=()).
+      smoke = [ "-f" "-c" "autoload -Uz is-at-least; is-at-least 5.0 && echo unpins-fpath-ok" ];
+      smokePattern = "unpins-fpath-ok";
 
       # Windows via Cosmopolitan (mingw is a dead end for zsh — needs
       # fork/job-control/signals). See cosmo.nix.

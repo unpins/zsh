@@ -19,7 +19,8 @@
 { unpins-lib }:
 pkgs:
 let
-  cosmoPkgs = unpins-lib.lib.cosmoStaticCross pkgs;
+  ulib = unpins-lib.lib;
+  cosmoPkgs = ulib.cosmoStaticCross pkgs;
 
   cosmoZsh = cosmoPkgs.zsh.overrideAttrs (oa: {
     # Same GCC-ICE dodge as native (sort.c under _FORTIFY_SOURCE=2). Harmless on
@@ -44,13 +45,7 @@ let
 # endif'
 
       echo "==> inject unpin-vfs core (vfs.c + miniz.c, routed via ld --wrap)"
-      cp ${./vfs.c}            Src/vfs.c
-      cp ${./vfs.h}            Src/vfs.h
-      cp ${./miniz.c}          Src/miniz.c
-      cp ${./miniz.h}          Src/miniz.h
-      cp ${./unpin_zstd.c}     Src/unpin_zstd.c
-      cp ${./unpin_zstd.h}     Src/unpin_zstd.h
-      cp ${./zstddeclib.c}     Src/zstddeclib.c
+      cp ${ulib.vfsCore}/*.c ${ulib.vfsCore}/*.h Src/
       cp ${./unpins_zsh_init.c} Src/unpins_zsh_init.c
 
       echo "==> wire unpins_zsh_init() into main()"
