@@ -155,11 +155,7 @@
         # config.modules edit.
         preBuild = (old.preBuild or "") + ''
           echo "==> pre-compile unpin-vfs objects (Makemod regen drops appended rules)"
-          # -DUNPIN_VFS_DLSYM (darwin): pick the binding where vfs.c DEFINES the
-          # libc entry points and reaches the real ones through dlsym(RTLD_NEXT).
-          # It is not the default on macOS — bare __APPLE__ selects the rename
-          # binding, which wants an IR-rewrite pass zsh has no equivalent of.
-          UNPIN_VFS_DEFS="-DUNPIN_VFS_DIRS -DUNPIN_VFS_SELF -DUNPIN_VFS_ROOT=\"/__unpins_zshruntime__/\"${lib.optionalString isDarwin " -DUNPIN_VFS_DLSYM"}"
+          UNPIN_VFS_DEFS="-DUNPIN_VFS_DIRS -DUNPIN_VFS_SELF -DUNPIN_VFS_NOWRAP -DUNPIN_VFS_ROOT=\"/__unpins_zshruntime__/\""
           MINIZ_DEFS="-DMINIZ_USE_ZSTD -DMINIZ_NO_TIME -DMINIZ_NO_ARCHIVE_WRITING_APIS -DMINIZ_NO_ZLIB_APIS -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES"
           ( cd Src
             $CC -O2 -c vfs.c            $UNPIN_VFS_DEFS $MINIZ_DEFS -o vfs.o
@@ -170,18 +166,39 @@
 
           echo "==> link the VFS objects into zsh (EXTRAZSHOBJS survives into Makemod)"
           echo 'EXTRAZSHOBJS += vfs.o miniz.o unpin_zstd.o unpins_zsh_init.o' >> Src/Makefile
-        '' + lib.optionalString (!isDarwin) ''
-          echo "==> Linux: route zsh's libc file calls through the wrappers via NIX_LDFLAGS"
-          export NIX_LDFLAGS="$NIX_LDFLAGS --wrap=open --wrap=stat --wrap=lstat --wrap=access --wrap=opendir --wrap=readdir --wrap=closedir --wrap=fopen"
         '';
 
-        # macOS needs NO extra link step: under -DUNPIN_VFS_DLSYM vfs.c DEFINES
-        # open/stat/…, and a definition in a linked object shadows the libSystem
-        # import for every reference — so zsh binds to our shims and the real
-        # calls go through dlsym(RTLD_NEXT, …). The old objcopy --redefine-sym +
-        # relink pass is gone; it couldn't touch the engine's -flto bitcode
-        # objects anyway. One scheme, both platforms — only the Linux `--wrap`
-        # above differs (ld64 has no --wrap; the define shim replaces it).
+        # ONE binding, both platforms, and now literally the same one: under
+        # -DUNPIN_VFS_NOWRAP vfs.c names its interceptors unpinvfs_*, and
+        # nix-lib's shared IR rename points zsh's own libc file-op references at
+        # them. This retires the last split — --wrap on Linux (linker-global, and
+        # dropped outright by the `ld -r` fold, so it could never carry into the
+        # mega) and -DUNPIN_VFS_DLSYM on darwin, which was picked only because
+        # there was no IR-rewrite pass within reach when this was written.
+        #
+        # The rename reaches exactly what is rewritten here, where --wrap reached
+        # the whole link. That is enough because everything zsh reads from the
+        # mount it reads from its OWN code: the fpath functions, the module
+        # table, compinit's dumps. The one external archive that could have been
+        # a problem is ncurses, and it carries its terminfo baked in rather than
+        # reading it back (native-overlay/ncurses.nix).
+        postBuild = (old.postBuild or "") + ''
+          ${ulib.vfsBindFns {
+              syms = [ "open" "fopen" "stat" "lstat" "access"
+                       "opendir" "readdir" "closedir" ];
+            }}
+          MT=${ulib.unpinToolchain pkgs.stdenv.buildPlatform.system}/bin/llvm
+          echo "==> bind the VFS: rename zsh's libc file-op refs in the IR"
+          # NOT the VFS objects themselves — vfs.c calls the genuine libc, so
+          # renaming its references would make each shim call itself.
+          for o in $(find . -name '*.o'); do
+            case "$(basename "$o")" in vfs.o|miniz.o|unpin_zstd.o) continue ;; esac
+            isbc "$o" && bcrewrite "$o"
+          done
+          echo "==> relink zsh against the rewritten objects"
+          rm -f Src/zsh
+          make $makeFlags -j''${NIX_BUILD_CORES:-1}
+        '';
       });
       cosmoMod = import ./cosmo.nix { inherit unpins-lib; };
     in
