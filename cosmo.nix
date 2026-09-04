@@ -61,6 +61,11 @@ let
       # mirroring native Windows shells and keeping a single on-disk name (no
       # `ls` + `ls.exe` pair). `__COSMOCC__`-guarded, inert elsewhere.
       patch -p1 < ${./findcmd-exe-lookup.patch}
+
+      # Same as the native build: a linked-in module that is never auto-loaded
+      # still needs its moddeps registered, or zmodload boots it with nothing
+      # under it.
+      patch -p1 < ${./linked-loadno-moddeps.patch}
     '';
 
     # Drop the NixOS-only global zshenv (dead /nix/store path stat'd every

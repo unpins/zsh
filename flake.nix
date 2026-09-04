@@ -112,9 +112,17 @@
             export zsh_cv_path_errno_h=${pkgs.lib.getDev p.musl}/include/bits/errno.h
           '';
 
+          # Registering a linked-in module's dependencies is what keeps
+          # `zmodload zsh/deltochar` from booting a zle widget with no zle.
+          postPatch = (o.postPatch or "") + ''
+            patch -p1 < ${./linked-loadno-moddeps.patch}
+          '';
+
           # Force ALL modules into the static binary (config.modules edit is the
-          # upstream-supported knob, zsh INSTALL). Verified: all 38 modules
-          # `zmodload`-load and work (sqrt/pcre_match/…).
+          # upstream-supported knob, zsh INSTALL). Verified against the .mdd set:
+          # all 39 `zmodload`-load on Linux, 33 on Windows (the rest have no
+          # backing library there). That count is only honest with the
+          # moddeps patch above — without it `zmodload zsh/deltochar` crashed.
           preBuild = (o.preBuild or "") + ''
             sed -i 's/ link=no / link=static /' config.modules
           '';

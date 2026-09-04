@@ -1,0 +1,47 @@
+Register moddeps for a linked-in module that is never auto-loaded.
+
+mkbltnmlst.sh emits add_dep() in two places: for modules with load=yes,
+and for dynamic modules with load=no. A module that is linked into the
+binary *and* declares load=no falls through both, so nothing tells
+load_module() what it is built on. Stock zsh never notices, because there
+such a module stays a .so and the missing dependency surfaces as a clean
+"undefined symbol" from the dynamic loader. With every module linked in,
+the same `zmodload zsh/deltochar` instead runs the module's boot code with
+zsh/zle absent and dereferences a null keymap.
+
+The sibling loop's own grep pattern is no guide here: it ends in a space,
+while a config.modules line ends right after `load=no` unless the module
+also declares functions=, which neither zsh/deltochar nor zsh/zftp does.
+Match the two fields separately instead.
+
+--- a/Src/mkbltnmlst.sh
++++ b/Src/mkbltnmlst.sh
+@@ -100,6 +100,28 @@
+     fi
+ done
+ 
++# Same, for a module that is linked in and never auto-loaded: zmodload can
++# still reach it, and load_module() has to boot what it depends on first.
++stat_mods="`grep ' link=static ' $CFMOD | grep ' load=no' | \
++          sed -e '/^#/d' -e 's/ .*/ /' -e 's/^name=/ /'`"
++
++for mod in $stat_mods; do
++    modfile="`grep '^name='$mod' ' $CFMOD | \
++              sed -e 's/^.* modfile=//' -e 's/ .*//'`"
++    if test "x$modfile" = x; then
++	echo >&2 "WARNING: no name for \`$mod' in $CFMOD (ignored)"
++	continue
++    fi
++    unset moddeps
++    . $srcdir/../$modfile
++    if test -n "$moddeps"; then
++        echo "/* linked-in module \`$mod', not auto-loaded */"
++        for dep in $moddeps; do
++          echo "  add_dep(\"$mod\", \"$dep\");"
++        done
++    fi
++done
++
+ echo
+ done_mods=" "
+ for bin_mod in $bin_mods; do
