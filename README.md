@@ -76,15 +76,7 @@ The [Releases](https://github.com/unpins/zsh/releases) page has standalone binar
   `share/zsh/<ver>/functions` + `scripts` tree is packed into a ZIP appended at
   the binary's EOF and served by the shared
   [unpin-vfs](https://github.com/unpins/unpin) core; `$fpath` is pointed at the
-  in-binary mount. The VFS core fronts zsh's `open`/`stat`/`opendir`/`readdir`/…
-  with the same shims on **every** platform — one scheme, differing only in how
-  the shims are engaged: on Linux via the linker's `ld --wrap`; on macOS, where
-  ld64 has no `--wrap`, the shims **define** the libc entry points (a definition
-  in a linked object shadows the libSystem import) and reach the real calls
-  through `dlsym(RTLD_NEXT, …)` — the same interposition pattern nix-lib's
-  DNS fallback uses, and one that composes with the engine's `-flto` bitcode (an
-  objcopy symbol-rename can't touch bitcode `.o`). `strace` shows zero
-  `/nix/store` reads during `compinit`.
+  in-binary mount. `strace` shows zero `/nix/store` reads during `compinit`.
 
 - **Static linking, every target.** Linux is static-musl (every arch); the
   binary carries a curated ncurses terminfo fallback so `zle`/`terminfo` work
