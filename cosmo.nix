@@ -66,6 +66,10 @@ let
       # still needs its moddeps registered, or zmodload boots it with nothing
       # under it.
       patch -p1 < ${./linked-loadno-moddeps.patch}
+
+      # cosmo's configure finds no mmap, so mapfile takes its readoutput()
+      # fallback, which zsh 5.9.1 left static in exec.c. Export it.
+      patch -p1 < ${./mapfile-readoutput.patch}
     '';
 
     # Drop the NixOS-only global zshenv (dead /nix/store path stat'd every

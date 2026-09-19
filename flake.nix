@@ -114,8 +114,13 @@
 
           # Registering a linked-in module's dependencies is what keeps
           # `zmodload zsh/deltochar` from booting a zle widget with no zle.
+          #
+          # zsh 5.9.1's mapfile falls back to exec.c's readoutput() when
+          # configure finds no mmap (the darwin-x86_64 cross, cosmo), but
+          # readoutput is static there: "undeclared identifier". Export it.
           postPatch = (o.postPatch or "") + ''
             patch -p1 < ${./linked-loadno-moddeps.patch}
+            patch -p1 < ${./mapfile-readoutput.patch}
           '';
 
           # Force ALL modules into the static binary (config.modules edit is the
