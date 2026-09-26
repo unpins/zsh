@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [5.9.1-1] - 2026-09-26
+
 ### Added
 
 - First release of Zsh 5.9 as a single self-contained binary for Linux, macOS
