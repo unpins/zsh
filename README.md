@@ -64,10 +64,13 @@ The [Releases](https://github.com/unpins/zsh/releases) page has standalone binar
   whose `.mdd` says `link=dynamic` (mathfunc, pcre, regex, system, stat, zpty,
   the `zsh/net/*` family, …). We force the whole set back into the static link
   (`config.modules` `link=no` → `link=static`, the upstream-supported knob) and
-  turn on `--enable-gdbm` and Linux `--enable-cap`, so all 39 modules
-  `zmodload`-load and work. On macOS/Windows the handful with no backing
-  library/header (cap, db/*, attr, clone, net/tcp, zftp, zpty) stay out —
-  configure detection handles that — leaving 33 live modules there.
+  turn on `--enable-gdbm` and, on Linux, `--enable-cap`:
+  - Linux: all 39 modules `zmodload`-load and work.
+  - macOS: the same set; `zsh/cap` loads as a stub, since capabilities are a
+    Linux feature.
+  - Windows: 34. Left out are `zsh/cap` (Linux capabilities), `zsh/attr`
+    (extended attributes), `zsh/net/tcp` and `zsh/zftp` (BSD networking
+    headers the Windows build lacks) and `zsh/zpty` (no pseudo-terminals).
 
 - **Completion/function tree embedded (unpin-vfs).** zsh resolves `$fpath`
   functions with `open()` and globs the directory with `opendir`/`readdir`
