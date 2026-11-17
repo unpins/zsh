@@ -1,0 +1,19 @@
+Call unpins_zsh_init() first thing in main().
+
+The hook (Src/unpins_zsh_init.c, copied in by the flake) prepares the
+embedded runtime tree before zsh_main() reads any startup state.
+
+--- a/Src/main.c
++++ b/Src/main.c
+@@ -1,3 +1,4 @@
++extern void unpins_zsh_init(void);
+ /*
+  * main.c - the main() function
+  *
+@@ -90,5 +91,6 @@
+ int
+ main(int argc, char **argv)
+ {
++    unpins_zsh_init();
+     return (zsh_main(argc, argv));
+ }

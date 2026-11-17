@@ -23,49 +23,20 @@ let
   cosmoPkgs = ulib.cosmoStaticCross pkgs;
 
   cosmoZsh = cosmoPkgs.zsh.overrideAttrs (oa: {
-    postPatch = (oa.postPatch or "") + ''
-      # Cosmopolitan abstracts over several OSes whose rlimit numbering differs,
-      # so it exposes RLIM_NLIMITS / RLIMIT_* as runtime `extern const` symbols,
-      # NOT compile-time constants. zsh's core uses RLIM_NLIMITS as a file-scope
-      # array dimension (`struct rlimit current_limits[RLIM_NLIMITS]` in exec.c,
-      # mirrored into exec.epro) — a constant expression is required there. Pin
-      # it to a fixed upper bound right after <sys/resource.h> (the loops that
-      # walk it call getrlimit(i) and tolerate EINVAL for unused slots). 16
-      # covers every RLIMIT_* cosmo defines (RLIMIT_AS..RLIMIT_SWAP).
-      substituteInPlace Src/zsh_system.h \
-        --replace '# include <sys/resource.h>' \
-                  '# include <sys/resource.h>
-# ifdef __COSMOPOLITAN__
-#  undef RLIM_NLIMITS
-#  define RLIM_NLIMITS 16
-# endif'
+    # Each patch says why in its header; the last two are shared with the
+    # native build.
+    patches = (oa.patches or [ ]) ++ [
+      ./cosmo-rlim-nlimits.patch
+      ./main-unpins-init.patch
+      ./findcmd-exe-lookup.patch
+      ./linked-loadno-moddeps.patch
+      ./mapfile-readoutput.patch
+    ];
 
+    postPatch = (oa.postPatch or "") + ''
       echo "==> inject unpin-vfs core (vfs.c + miniz.c, routed via ld --wrap)"
       cp ${ulib.vfsCore}/*.c ${ulib.vfsCore}/*.h Src/
       cp ${./unpins_zsh_init.c} Src/unpins_zsh_init.c
-
-      echo "==> wire unpins_zsh_init() into main()"
-      sed -i '1i extern void unpins_zsh_init(void);' Src/main.c
-      sed -i 's|return (zsh_main(argc, argv));|unpins_zsh_init();\n    return (zsh_main(argc, argv));|' Src/main.c
-
-      # Windows command lookup: catalog programs install as `<name>.exe`
-      # hardlinks (cmd.exe/PowerShell find them via PATHEXT), but Cosmopolitan
-      # does not append an executable suffix during path resolution, so a bare
-      # `ls` typed at the zsh prompt never resolves. The patch teaches zsh's PATH
-      # search (hashcmd) to retry a candidate with `.exe` when the bare name is
-      # missing, hashing the resolved `.exe` path so it reaches zexecve —
-      # mirroring native Windows shells and keeping a single on-disk name (no
-      # `ls` + `ls.exe` pair). `__COSMOCC__`-guarded, inert elsewhere.
-      patch -p1 < ${./findcmd-exe-lookup.patch}
-
-      # Same as the native build: a linked-in module that is never auto-loaded
-      # still needs its moddeps registered, or zmodload boots it with nothing
-      # under it.
-      patch -p1 < ${./linked-loadno-moddeps.patch}
-
-      # cosmo's configure finds no mmap, so mapfile takes its readoutput()
-      # fallback, which zsh 5.9.1 left static in exec.c. Export it.
-      patch -p1 < ${./mapfile-readoutput.patch}
     '';
 
     # Drop the NixOS-only global zshenv (dead /nix/store path stat'd every

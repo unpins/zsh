@@ -1,3 +1,10 @@
+Export readoutput() so mapfile's no-mmap fallback links.
+
+When configure finds no mmap (the darwin-x86_64 cross, cosmo), the
+mapfile module reads files through exec.c's readoutput(), which zsh
+5.9.1 declares static: "undeclared identifier". Upstream master reads
+through zstuff() instead, so drop this patch at the bump past 5.9.1.
+
 --- a/Src/exec.c
 +++ b/Src/exec.c
 @@ -4729,7 +4729,7 @@

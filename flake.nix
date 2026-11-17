@@ -109,10 +109,10 @@
           # zsh 5.9.1's mapfile falls back to exec.c's readoutput() when
           # configure finds no mmap (the darwin-x86_64 cross, cosmo), but
           # readoutput is static there: "undeclared identifier". Export it.
-          postPatch = (o.postPatch or "") + ''
-            patch -p1 < ${./linked-loadno-moddeps.patch}
-            patch -p1 < ${./mapfile-readoutput.patch}
-          '';
+          patches = (o.patches or [ ]) ++ [
+            ./linked-loadno-moddeps.patch
+            ./mapfile-readoutput.patch
+          ];
 
           # Force ALL modules into the static binary (config.modules edit is the
           # upstream-supported knob, zsh INSTALL). Verified against the .mdd set:
@@ -144,11 +144,8 @@
           echo "==> inject unpin-vfs core (vfs.c + miniz.c)"
           cp ${ulib.vfsCore}/*.c ${ulib.vfsCore}/*.h Src/
           cp ${./unpins_zsh_init.c} Src/unpins_zsh_init.c
-
-          echo "==> wire unpins_zsh_init() into main()"
-          sed -i '1i extern void unpins_zsh_init(void);' Src/main.c
-          sed -i 's|return (zsh_main(argc, argv));|unpins_zsh_init();\n    return (zsh_main(argc, argv));|' Src/main.c
         '';
+        patches = (old.patches or [ ]) ++ [ ./main-unpins-init.patch ];
 
         # Runs after configure (Src/Makefile exists) and after zshBase's
         # config.modules edit.

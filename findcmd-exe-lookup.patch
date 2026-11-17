@@ -1,3 +1,14 @@
+Retry a PATH candidate with ".exe" under Cosmopolitan.
+
+Catalog programs install on Windows as `<name>.exe` hardlinks (cmd.exe and
+PowerShell find them via PATHEXT), but Cosmopolitan appends no executable
+suffix during path resolution, so a bare `ls` typed at the zsh prompt never
+resolves. Teach zsh's PATH search (hashcmd) to retry a candidate with ".exe"
+when the bare name is missing, hashing the resolved ".exe" path so it
+reaches zexecve: the behaviour of native Windows shells, with a single
+on-disk name (no `ls` + `ls.exe` pair). Guarded by __COSMOCC__, inert
+elsewhere.
+
 --- a/Src/exec.c
 +++ b/Src/exec.c
 @@ -806,6 +806,27 @@

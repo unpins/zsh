@@ -1,0 +1,24 @@
+Give RLIM_NLIMITS a compile-time value under Cosmopolitan.
+
+Cosmopolitan serves several OSes whose rlimit numbering differs, so it
+exposes RLIM_NLIMITS and RLIMIT_* as runtime `extern const` symbols, not
+constants. zsh uses RLIM_NLIMITS as a file-scope array dimension
+(`struct rlimit current_limits[RLIM_NLIMITS]` in exec.c, mirrored into
+exec.epro), which needs a constant expression. Pin it to an upper bound:
+the loops that walk the array call getrlimit(i) and tolerate EINVAL for
+unused slots, and 16 covers every RLIMIT_* cosmo defines (RLIMIT_AS ..
+RLIMIT_SWAP).
+
+--- a/Src/zsh_system.h
++++ b/Src/zsh_system.h
+@@ -531,6 +531,10 @@
+ 
+ #ifdef HAVE_SYS_RESOURCE_H
+ # include <sys/resource.h>
++# ifdef __COSMOPOLITAN__
++#  undef RLIM_NLIMITS
++#  define RLIM_NLIMITS 16
++# endif
+ # if defined(__hpux) && !defined(RLIMIT_CPU)
+ /* HPUX does have the BSD rlimits in the kernel.  Officially they are *
+  * unsupported but quite a few of them like RLIMIT_CORE seem to work. *
