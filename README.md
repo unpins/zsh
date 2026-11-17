@@ -76,18 +76,11 @@ The [Releases](https://github.com/unpins/zsh/releases) page has standalone binar
   `share/zsh/<ver>/functions` + `scripts` tree is packed into a ZIP appended at
   the binary's EOF and served by the shared
   [unpin-vfs](https://github.com/unpins/unpin) core; `$fpath` is pointed at the
-  in-binary mount. `strace` shows zero `/nix/store` reads during `compinit`.
+  in-binary mount.
 
-- **Static linking, every target.** Linux is static-musl (every arch); the
-  binary carries a curated ncurses terminfo fallback so `zle`/`terminfo` work
-  with no `/usr/share/terminfo` on the host. The runtime closure is the binary
-  alone — zsh's configure bakes its own `$out` into the default
-  module_path/fpath/scriptpath and a few shipped functions, but every module is
-  static and `$fpath` is repointed at the mount, so those paths are dead; they
-  are scrubbed (`remove-references-to` on the constants, a `sed` pass on the
-  embedded function files) leaving `nix-store -qR` = the output itself. macOS
-  links only `libSystem` (everything else — ncurses, pcre2, gdbm, iconv — is
-  static; `otool -L` confirms).
+- **Terminal handling without a terminfo database.** The binary carries a
+  curated ncurses terminfo fallback, so `zle` and the `terminfo` module work
+  on a host with no `/usr/share/terminfo`.
 
 - **Windows via Cosmopolitan.** mingw can't host zsh (no `fork`, job control, or
   POSIX signals), so the Windows binary goes through cosmo. The same VFS core
