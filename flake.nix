@@ -59,7 +59,7 @@
       # darwin (native-overlay/ncurses.nix), so p.ncurses already carries it.
       zshBase = pkgs:
         let p = pkgs.pkgsStatic;
-        in (p.zsh.override { ncurses = p.ncurses; }).overrideAttrs (o: {
+        in p.zsh.overrideAttrs (o: {
           hardeningDisable = (o.hardeningDisable or [ ]) ++ [ "fortify" "fortify3" ];
 
           # Optional libs zsh links against. Two modules are gated behind both a
