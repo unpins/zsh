@@ -23,10 +23,6 @@ let
   cosmoPkgs = ulib.cosmoStaticCross pkgs;
 
   cosmoZsh = cosmoPkgs.zsh.overrideAttrs (oa: {
-    # Same GCC-ICE dodge as native (sort.c under _FORTIFY_SOURCE=2). Harmless on
-    # cosmocc; keep for parity.
-    hardeningDisable = (oa.hardeningDisable or [ ]) ++ [ "fortify" "fortify3" ];
-
     postPatch = (oa.postPatch or "") + ''
       # Cosmopolitan abstracts over several OSes whose rlimit numbering differs,
       # so it exposes RLIM_NLIMITS / RLIMIT_* as runtime `extern const` symbols,

@@ -12,10 +12,6 @@
   # in, the runtime function/completion tree embedded, no /nix/store closure.
   #
   # Deltas vs nixpkgs pkgsStatic.zsh:
-  #   - hardeningDisable = [ "fortify" ]: pkgsStatic's _FORTIFY_SOURCE=2
-  #     triggers a GCC ICE (tree-object-size.cc, check_for_plus_in_loops)
-  #     compiling Src/sort.c at -O2 under musl. Drop fortify to dodge the
-  #     compiler bug — no functional change.
   #   - ncurses fallback-terminfo (zsh's zle/terminfo modules look up terminal
   #     capabilities via ncurses; baked fallbacks avoid reading host
   #     /usr/share/terminfo) is now applied centrally to every engine ncurses in
@@ -57,8 +53,6 @@
       zshBase = pkgs:
         let p = pkgs.pkgsStatic;
         in p.zsh.overrideAttrs (o: {
-          hardeningDisable = (o.hardeningDisable or [ ]) ++ [ "fortify" "fortify3" ];
-
           # Optional libs zsh links against. Two modules are gated behind both a
           # configure flag AND a library (the rest auto-detect against libc):
           #   - zsh/db/gdbm → --enable-gdbm + gdbm. nixpkgs' own zsh leaves it
