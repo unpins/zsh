@@ -50,7 +50,10 @@ let
       builtins.filter
         (f: !(pkgs.lib.hasPrefix "--enable-zshenv=" f))
         (oa.configureFlags or [ ])
-      ++ [ "--disable-dynamic" ];
+      ++ [ "--disable-dynamic" "--enable-gdbm" ];
+    # zsh/db/gdbm, as on native: gdbm builds under cosmocc, and ztie/zuntie
+    # round-trip a database on Windows.
+    buildInputs = (oa.buildInputs or [ ]) ++ [ cosmoPkgs.gdbm ];
 
     # Force every cosmo-buildable module into the static binary (same knob as
     # the native build: editing config.modules after configure is upstream-
@@ -59,7 +62,6 @@ let
     # compile/link:
     #   - zsh/cap     → libcap (Linux POSIX.1e capabilities); no cosmo port, and
     #                   capabilities are meaningless on Windows anyway.
-    #   - zsh/db/*    → gdbm / Berkeley DB / tdb; no cosmo overlay for any.
     #   - zsh/attr    → <sys/xattr.h> (Linux/macOS xattrs); absent on cosmo.
     #   - zsh/net/tcp → <netinet/in_systm.h> (BSD raw-IP header) absent on cosmo.
     #   - zsh/zftp    → <arpa/telnet.h> absent on cosmo.
@@ -75,7 +77,7 @@ let
     # NIX_LDFLAGS for the `--wrap` flags. Compiled in preBuild, after configure.
     preBuild = (oa.preBuild or "") + ''
       sed -i 's/ link=no / link=static /' config.modules
-      for m in zsh/cap zsh/db/gdbm zsh/db/db zsh/db/tdb zsh/attr \
+      for m in zsh/cap zsh/attr \
                zsh/net/tcp zsh/zftp zsh/zpty; do
         sed -i "\#name=$m #s/ link=[a-z]* / link=no /" config.modules
       done

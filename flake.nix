@@ -41,7 +41,7 @@
   #     Linux-only and stays a stub here, as it should.
   #   - Windows (PE .exe built by cosmocc): see cosmo.nix — mingw is a dead
   #     end for zsh (needs fork/job-control/signals), so the Windows binary is
-  #     cosmocc-built with the 33 modules cosmo can back and the same VFS core.
+  #     cosmocc-built with the 34 modules cosmo can back and the same VFS core.
   outputs = { self, unpins-lib }:
     let
       ulib = unpins-lib.lib;
@@ -116,7 +116,7 @@
 
           # Force ALL modules into the static binary (config.modules edit is the
           # upstream-supported knob, zsh INSTALL). Verified against the .mdd set:
-          # all 39 `zmodload`-load on Linux, 33 on Windows (the rest have no
+          # all 39 `zmodload`-load on Linux, 34 on Windows (the rest have no
           # backing library there). That count is only honest with the
           # moddeps patch above — without it `zmodload zsh/deltochar` crashed.
           preBuild = (o.preBuild or "") + ''
