@@ -16,18 +16,19 @@
 #     GetProgramExecutableName() (the real on-disk path) instead.
 #   - anon_fd: memfd_create returns -1 on cosmo-Windows, so it uses
 #     mkstemp+unlink (cosmo emulates POSIX delete-while-open).
-{ unpins-lib }:
+{ unpins-lib, stageRuntime }:
 pkgs:
 let
   ulib = unpins-lib.lib;
   cosmoPkgs = ulib.cosmoStaticCross pkgs;
 
   cosmoZsh = cosmoPkgs.zsh.overrideAttrs (oa: {
-    # Each patch says why in its header; the last two are shared with the
-    # native build.
+    # Each patch says why in its header; all but the first and the third are
+    # shared with the native build.
     patches = (oa.patches or [ ]) ++ [
       ./cosmo-rlim-nlimits.patch
       ./main-unpins-init.patch
+      ./run-help-stdin.patch
       ./findcmd-exe-lookup.patch
       ./linked-loadno-moddeps.patch
       ./mapfile-readoutput.patch
@@ -124,19 +125,14 @@ let
 in
 # The PRISTINE cosmo zsh base + the embed spec consumed by mkStandaloneFlake's
 # runtimeEmbed.windows → unpinEmbedWrap (the single embed path; it appends the
-# container at EOF after apelink and handles the `.exe` suffix): stage the
-# function+script trees at the ZIP root (the mount-relative paths
-# $fpath/UNPIN_VFS_ROOT use) and embed the cosmo build's own man.
+# container at EOF after apelink and handles the `.exe` suffix): the runtime
+# trees staged as on native (stageRuntime, flake.nix) and the cosmo build's own
+# man.
 {
   base = cosmoZsh;
   embed = {
     man = true;
     manRoot = "${cosmoZsh.man or cosmoZsh}";
-    runtimeStage = ''
-      mkdir -p "$__unpin_stage/functions" "$__unpin_stage/scripts"
-      cp -a ${cosmoZsh}/share/zsh/*/functions/. "$__unpin_stage/functions/"
-      cp -a ${cosmoZsh}/share/zsh/*/scripts/.   "$__unpin_stage/scripts/" 2>/dev/null || true
-      chmod -R u+w "$__unpin_stage"
-    '';
+    runtimeStage = stageRuntime cosmoZsh;
   };
 }

@@ -149,7 +149,10 @@
           cp ${ulib.vfsCore}/*.c ${ulib.vfsCore}/*.h Src/
           cp ${./unpins_zsh_init.c} Src/unpins_zsh_init.c
         '';
-        patches = (old.patches or [ ]) ++ [ ./main-unpins-init.patch ];
+        patches = (old.patches or [ ]) ++ [
+          ./main-unpins-init.patch
+          ./run-help-stdin.patch
+        ];
 
         # The compiled-in default $fpath and scripts dir (zshpaths.h) point at
         # the mount. Build only: `make install` must still put the trees under
@@ -205,7 +208,19 @@
           make $makeFlags ${lib.escapeShellArgs mountDirs} -j''${NIX_BUILD_CORES:-1}
         '';
       });
-      cosmoMod = import ./cosmo.nix { inherit unpins-lib; };
+      stageRuntime = base: ''
+        mkdir -p "$__unpin_stage/functions" "$__unpin_stage/scripts" "$__unpin_stage/help"
+        cp -a ${base}/share/zsh/*/functions/. "$__unpin_stage/functions/"
+        cp -a ${base}/share/zsh/*/scripts/.   "$__unpin_stage/scripts/" 2>/dev/null || true
+        cp -a ${base}/share/zsh/*/help/.      "$__unpin_stage/help/"
+        chmod -R u+w "$__unpin_stage"
+        find "$__unpin_stage" -type f | while read -r __f; do
+          sed -e "s#${base}/share/zsh/[^/]*/help#/__unpins_zshruntime__/help#g" \
+              -e "s#${base}#/__unpins_zshruntime__#g" "$__f" > "$__f.__unpin_tmp" \
+            && mv "$__f.__unpin_tmp" "$__f"
+        done
+      '';
+      cosmoMod = import ./cosmo.nix { inherit unpins-lib stageRuntime; };
     in
     unpins-lib.lib.mkStandaloneFlake {
       inherit self;
@@ -251,24 +266,15 @@
         native = pkgs: base: {
           man = true;
           manRoot = "${base.man}";
-          # Stage the function + script trees at the ZIP root (functions/,
-          # scripts/) — the mount-relative paths $fpath/UNPIN_VFS_ROOT use.
-          # Then sanitise the base zsh's own $out out of the staged files: a
-          # few shipped functions bake it into shebangs / HELPDIR defaults, and
-          # those strings would ride into the EOF ZIP as live store refs. They
-          # point at paths that don't exist in the portable binary (dead), so
-          # rewrite them to the mount root — keeps behaviour, drops the ref.
+          # Stage the function, script and run-help trees at the ZIP root
+          # (functions/, scripts/, help/) — the mount-relative paths
+          # fndir/scriptdir/UNPIN_VFS_ROOT use. Then sanitise the base zsh's
+          # own $out out of the staged files: run-help's HELPDIR default and a
+          # few shebangs bake it in, and those strings would ride into the EOF
+          # ZIP as live store refs to paths the portable binary doesn't have.
+          # HELPDIR maps to help/; anything else to the mount root.
           # `sed` without `-i` so it's portable across the GNU/BSD build hosts.
-          runtimeStage = ''
-            mkdir -p "$__unpin_stage/functions" "$__unpin_stage/scripts"
-            cp -a ${base}/share/zsh/*/functions/. "$__unpin_stage/functions/"
-            cp -a ${base}/share/zsh/*/scripts/.   "$__unpin_stage/scripts/" 2>/dev/null || true
-            chmod -R u+w "$__unpin_stage"
-            find "$__unpin_stage" -type f | while read -r __f; do
-              sed "s#${base}#/__unpins_zshruntime__#g" "$__f" > "$__f.__unpin_tmp" \
-                && mv "$__f.__unpin_tmp" "$__f"
-            done
-          '';
+          runtimeStage = stageRuntime base;
         };
         windows = pkgs: base: (cosmoMod pkgs).embed;
       };

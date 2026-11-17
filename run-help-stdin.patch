@@ -1,0 +1,18 @@
+Feed a run-help file to the pager on stdin.
+
+The help files live inside the binary, served by the in-process VFS, which
+the pager (an external program) cannot see: `more $HELPDIR/print` fails
+with "No such file". zsh itself can open them, so redirect and let the
+pager read stdin, which every pager supports.
+
+--- a/Functions/Misc/run-help
++++ b/Functions/Misc/run-help
+@@ -29,7 +29,7 @@
+     return 0
+ elif [[ -n "${HELPDIR:-}" && -r $HELPDIR/$1 && $1 != compctl ]]
+ then
+-    ${=PAGER:-more} $HELPDIR/$1
++    ${=PAGER:-more} < $HELPDIR/$1
+     return $?
+ fi
+ 
