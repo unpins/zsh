@@ -4,12 +4,12 @@
 # module linked in (--disable-dynamic) AND the runtime function/completion tree
 # embedded via the shared unpin-vfs core, same as the native build. The cosmo
 # cross stdenv auto-apelinks $out/bin/* (ELF -> PE32+, rename to <name>.exe) in
-# fixupPhase; withUnpinEmbed's postFixup then appends the runtime+man container
+# fixupPhase; unpinEmbedWrap's postFixup then appends the runtime+man container
 # at EOF (after apelink — PE tolerates trailing overlay data, verified).
 #
 # unpin-vfs on cosmo: cosmo defines neither _WIN32 nor __APPLE__, so vfs.c
 # compiles its Linux branch — `ld --wrap` works under cosmocc's ld.bfd. Two
-# Linux assumptions do NOT hold on the APE, so vfs.c has two __COSMOPOLITAN__
+# Linux assumptions do NOT hold on the Windows .exe, so vfs.c has two __COSMOPOLITAN__
 # arms (both probed under wine, then confirmed on a real Windows VM):
 #   - self_open: /proc/self/exe is synthesized on cosmo-Windows and reports the
 #     baked image size, hiding the EOF-appended container — so it reads
@@ -75,7 +75,7 @@ let
     # Drop the NixOS-only global zshenv (dead /nix/store path stat'd every
     # start; meaningless on Windows), and force a single self-contained binary:
     # --disable-dynamic links every module into the executable instead of
-    # producing per-module .so files (cosmo's APE can't dlopen anyway). It also
+    # producing per-module .so files (the cosmo .exe can't dlopen anyway). It also
     # resolves the cross-module link errors (rlimits.so: undefined
     # `setfeatureenables`) — those symbols live in the main binary and only
     # resolve once modules are statically linked in.

@@ -31,24 +31,21 @@
   #     DIRS mode (opendir/readdir). Without this the shell runs but
   #     completion/autoload break in a self-contained binary.
   #
-  # VFS interception — ONE scheme, Linux AND macOS: vfs.c's shims front the
-  # program's open/stat/lstat/access/opendir/readdir/closedir/fopen. Linux
-  # engages them with `ld --wrap` (NIX_LDFLAGS); macOS, where ld64 has no
-  # --wrap, DEFINES those symbols so the shim definitions shadow libSystem and
-  # reaches the real calls via dlsym(RTLD_NEXT, …) — nix-lib's dns-fallback
-  # pattern. No objcopy/relink; both compose with the engine's -flto bitcode.
-  # Windows (cosmo) is a separate build that keeps `ld --wrap` (cosmo supports
-  # it). See vfs.c's platform blocks and injectVfs.
+  # VFS interception — ONE binding, Linux AND macOS: vfs.c is compiled with
+  # -DUNPIN_VFS_NOWRAP (its shims are named unpinvfs_*), and nix-lib's IR
+  # rename points zsh's own open/fopen/stat/lstat/access/opendir/readdir/
+  # closedir references at them (injectVfs). Windows (cosmo) is a separate
+  # build that keeps `ld --wrap` via NIX_LDFLAGS (cosmo.nix).
   #
-  # Targets (all built; the runtime tree + 30–38 modules verified on each):
+  # Targets (all built; the runtime tree + modules verified on each):
   #   - Linux (static-musl, every arch): $fpath points at the embedded mount,
   #     compinit/autoload served from /proc/self/exe (strace: 0 /nix/store
-  #     reads), all 38 modules linked. x86_64 ~4.82 MB. cap/libcap enabled.
-  #   - macOS (Mach-O, libSystem-only): same interposition via define + dlsym.
-  #     cap/libcap is Linux-only and stays a stub here, as it should.
-  #   - Windows (Cosmopolitan APE): see cosmo.nix — mingw is a dead end for zsh
-  #     (needs fork/job-control/signals), so the Windows binary is cosmocc-built
-  #     with the modules cosmo can back and the same VFS core.
+  #     reads), all 39 modules load. cap/libcap enabled.
+  #   - macOS (Mach-O, libSystem-only): same binding. cap/libcap is
+  #     Linux-only and stays a stub here, as it should.
+  #   - Windows (PE .exe built by cosmocc): see cosmo.nix — mingw is a dead
+  #     end for zsh (needs fork/job-control/signals), so the Windows binary is
+  #     cosmocc-built with the 33 modules cosmo can back and the same VFS core.
   outputs = { self, unpins-lib }:
     let
       ulib = unpins-lib.lib;
@@ -133,21 +130,16 @@
           '';
         });
 
-      # Layer the unpin-vfs core onto the binary: copy sources, front zsh's libc
-      # file calls with the VFS shims, pin $fpath at the mount. One scheme on
-      # both platforms (Linux `--wrap`, macOS define+dlsym — see the header
-      # note); the VFS objects just have to be on the link line either way.
+      # Layer the unpin-vfs core onto the binary: copy sources, wire the init
+      # hook into main(), pre-compile the VFS objects, bind them (postBuild).
       #
       # zsh's real build runs through a recursive `make -f Makemod` that passes
       # CC/CFLAGS/EXTRA_LDFLAGS on the sub-make command line (those override any
       # makefile assignment) and is generated fresh from the .mdd files — so
       # neither appended compile rules nor an `EXTRA_LDFLAGS +=` survive there.
-      # Two robustness moves: pre-compile the VFS objects in preBuild (they just
-      # have to exist as files; EXTRAZSHOBJS, concatenated into Makemod, places
-      # them on the link line), and on Linux inject the `--wrap` flags via
-      # NIX_LDFLAGS (the nix cc-wrapper applies them to the final link regardless
-      # of the makefile) — exported in preBuild, AFTER configure, so the conftest
-      # links that have no vfs.o don't hit an undefined __wrap_open.
+      # So the VFS objects are pre-compiled in preBuild (they just have to exist
+      # as files; EXTRAZSHOBJS, concatenated into Makemod, places them on the
+      # link line).
       injectVfs = pkgs: drv: drv.overrideAttrs (old:
         let
           lib = pkgs.lib;
