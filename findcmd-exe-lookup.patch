@@ -1,33 +1,67 @@
-Retry a PATH candidate with ".exe" under Cosmopolitan.
+Retry a PATH candidate with ".exe", then ".com", under Cosmopolitan.
 
 Catalog programs install on Windows as `<name>.exe` hardlinks (cmd.exe and
 PowerShell find them via PATHEXT), but Cosmopolitan appends no executable
 suffix during path resolution, so a bare `ls` typed at the zsh prompt never
-resolves. Teach zsh's PATH search (hashcmd) to retry a candidate with ".exe"
-when the bare name is missing, hashing the resolved ".exe" path so it
-reaches zexecve: the behaviour of native Windows shells, with a single
-on-disk name (no `ls` + `ls.exe` pair). Guarded by __COSMOCC__, inert
-elsewhere.
+resolves. Teach zsh's PATH search (hashcmd) to retry a missing candidate
+with the PATHEXT suffixes that name programs — ".exe", then ".com", which
+is all `more` ships as — hashing the resolved path so the suffix reaches
+zexecve: the behaviour of native Windows shells, with a single on-disk
+name (no `ls` + `ls.exe` pair). Guarded by __COSMOCC__, inert elsewhere.
 
 --- a/Src/exec.c
 +++ b/Src/exec.c
-@@ -806,6 +806,27 @@
+@@ -606,6 +606,35 @@ zexecve(char *pth, char **argv, char **newenvp)
+ 
+ #define MAXCMDLEN (PATH_MAX*4)
+ 
++#ifdef __COSMOCC__
++/* The suffixes PATHEXT would try, in its order: catalog programs install *
++ * as NAME.exe, and some Windows console tools (more) only as NAME.com.   */
++static char const *const winexts[] = { ".exe", ".com", NULL };
++
++/* buf holds a candidate of length len in a buffer of size bufsz.  Unless  *
++ * it already ends in one of winexts or has no room for one, append the    *
++ * first suffix that names a command and return 1; otherwise restore buf   *
++ * and return 0.                                                           */
++static int
++winext(char *buf, size_t len, size_t bufsz)
++{
++    char const *const *e;
++
++    for (e = winexts; *e; e++)
++	if (len >= 4 && !strcmp(buf + len - 4, *e))
++	    return 0;
++    if (len + 4 >= bufsz)
++	return 0;
++    for (e = winexts; *e; e++) {
++	strcpy(buf + len, *e);
++	if (iscom(buf))
++	    return 1;
++    }
++    buf[len] = '\0';
++    return 0;
++}
++#endif
++
+ /* test whether we really want to believe the error number */
+ 
+ /**/
+@@ -819,6 +848,25 @@ execute(LinkList args, int flags, int defpath)
  	}
  	for (pp = path; *pp; pp++)
  	    if (!(*pp)[0] || ((*pp)[0] == '.' && !(*pp)[1])) {
 +#ifdef __COSMOCC__
 +		/* Relative ("." or empty) $path element: zsh never hashes  *
 +		 * these, so this loop is the only resolution path.  On      *
-+		 * Windows, retry arg0's ".exe" sibling so a bare `ls` finds *
-+		 * `ls.exe` in the current directory.  iscom() guards the    *
-+		 * retry; we only divert to the ".exe" name when it exists.  */
++		 * Windows, retry arg0 with a PATHEXT suffix so a bare `ls`  *
++		 * finds `ls.exe` in the current directory; we only divert   *
++		 * to the suffixed name when it exists.                      */
 +		{
 +		    size_t a0l = strlen(arg0);
-+		    if (!(a0l >= 4 && !strcmp(arg0 + a0l - 4, ".exe")) &&
-+			a0l + 4 < MAXCMDLEN) {
++		    if (a0l < MAXCMDLEN) {
 +			strcpy(buf, arg0);
-+			strcat(buf, ".exe");
-+			if (iscom(buf)) {
++			if (winext(buf, a0l, MAXCMDLEN)) {
 +			    ee = zexecve(buf, argv, newenvp);
 +			    if (isgooderr(ee, *pp))
 +				eno = ee;
@@ -39,70 +73,55 @@ elsewhere.
  		ee = zexecve(arg0, argv, newenvp);
  		if (isgooderr(ee, *pp))
  		    eno = ee;
-@@ -814,6 +835,23 @@
+@@ -827,6 +875,14 @@ execute(LinkList args, int flags, int defpath)
  		strucpy(&z, *pp);
  		*z++ = '/';
  		strcpy(z, arg0);
 +#ifdef __COSMOCC__
 +		/* Relative $path dir: candidate is *pp/arg0 in buf.  On     *
-+		 * Windows, if that file is absent but its ".exe" sibling    *
-+		 * exists, append ".exe" so the path that reaches zexecve    *
-+		 * carries the suffix (mirrors the absolute-dir handling in  *
-+		 * hashcmd()).  (z - buf) is the prefix length already       *
-+		 * written; bound the append against MAXCMDLEN.              */
-+		if (!iscom(buf)) {
-+		    size_t cl = z - buf + strlen(arg0);
-+		    if (!(cl >= 4 && !strcmp(buf + cl - 4, ".exe")) &&
-+			cl + 4 < MAXCMDLEN) {
-+			strcat(buf, ".exe");
-+			if (!iscom(buf))
-+			    buf[cl] = '\0';
-+		    }
-+		}
++		 * Windows, if that file is absent but a PATHEXT sibling     *
++		 * exists, the path that reaches zexecve carries the suffix  *
++		 * (mirrors the absolute-dir handling in hashcmd()).         */
++		if (!iscom(buf))
++		    winext(buf, z - buf + strlen(arg0), MAXCMDLEN);
 +#endif
  		ee = zexecve(buf, argv, newenvp);
  		if (isgooderr(ee, *pp))
  		    eno = ee;
-@@ -960,6 +998,18 @@
+@@ -973,6 +1029,15 @@ hashcmd(char *arg0, char **pp)
      Cmdnam cn;
      char *s, buf[PATH_MAX+1];
      char **pq;
 +#ifdef __COSMOCC__
-+    /* On Windows, allow a bare name to resolve to its ".exe" sibling     *
-+     * (mirroring PATHEXT): when DIR/arg0 is absent, retry DIR/arg0.exe.  *
-+     * If the ".exe" variant is the one that exists, the resolved path    *
-+     * must carry ".exe" all the way to zexecve, so we hash the node as   *
-+     * a HASHED entry holding the full ".exe" path in cn->u.cmd rather    *
-+     * than letting execute()/findcmd() rebuild DIR/arg0 from the bare    *
-+     * name.                                                              */
-+    int found_exe = 0;
-+    size_t arg0len = strlen(arg0);
-+    int has_exe = (arg0len >= 4 && !strcmp(arg0 + arg0len - 4, ".exe"));
++    /* On Windows, allow a bare name to resolve to a PATHEXT sibling:     *
++     * when DIR/arg0 is absent, retry DIR/arg0.exe and DIR/arg0.com.  If  *
++     * a suffixed name is the one that exists, the resolved path must     *
++     * carry the suffix all the way to zexecve, so we hash the node as a  *
++     * HASHED entry holding the full path in cn->u.cmd rather than        *
++     * letting execute()/findcmd() rebuild DIR/arg0 from the bare name.   */
++    int found_ext = 0;
 +#endif
-
+ 
      if (*arg0 == '/')
          return NULL;
-@@ -973,12 +1023,29 @@
+@@ -986,12 +1051,26 @@ hashcmd(char *arg0, char **pp)
  	    strcpy(s, arg0);
  	    if (iscom(buf))
  		break;
 +#ifdef __COSMOCC__
-+	    if (!has_exe && (s - buf) + arg0len + 4 <= PATH_MAX) {
-+		strcat(buf, ".exe");
-+		if (iscom(buf)) {
-+		    found_exe = 1;
-+		    break;
-+		}
++	    if (winext(buf, (s - buf) + strlen(arg0), sizeof buf)) {
++		found_ext = 1;
++		break;
 +	    }
 +#endif
  	}
-
+ 
      if (!*pp)
  	return NULL;
-
+ 
      cn = (Cmdnam) zshcalloc(sizeof *cn);
 +#ifdef __COSMOCC__
-+    if (found_exe) {
++    if (found_ext) {
 +	cn->node.flags = HASHED;
 +	cn->u.cmd = ztrdup(buf);
 +	cmdnamtab->addnode(cmdnamtab, ztrdup(arg0), cn);
