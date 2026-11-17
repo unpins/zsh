@@ -22,10 +22,10 @@
   #     .mdd says `link=dynamic`).
   #   - unpin-vfs: zsh's function/completion tree (share/zsh/<ver>/functions +
   #     scripts) is embedded in the binary's EOF ZIP and served by the VFS core
-  #     interposing zsh's libc file calls; $fpath is pointed at the mount (FPATH
-  #     env, set in unpins_zsh_init.c). compinit globs $fpath, so the VFS runs in
-  #     DIRS mode (opendir/readdir). Without this the shell runs but
-  #     completion/autoload break in a self-contained binary.
+  #     interposing zsh's libc file calls; $fpath and the scripts dir default
+  #     to the mount (fndir/scriptdir at build time). compinit globs $fpath, so
+  #     the VFS runs in DIRS mode (opendir/readdir). Without this the shell
+  #     runs but completion/autoload break in a self-contained binary.
   #
   # VFS interception — ONE binding, Linux AND macOS: vfs.c is compiled with
   # -DUNPIN_VFS_NOWRAP (its shims are named unpinvfs_*), and nix-lib's IR
@@ -138,6 +138,10 @@
         let
           lib = pkgs.lib;
           isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
+          mountDirs = [
+            "fndir=/__unpins_zshruntime__/functions"
+            "scriptdir=/__unpins_zshruntime__/scripts"
+          ];
         in
         {
         postPatch = (old.postPatch or "") + ''
@@ -146,6 +150,11 @@
           cp ${./unpins_zsh_init.c} Src/unpins_zsh_init.c
         '';
         patches = (old.patches or [ ]) ++ [ ./main-unpins-init.patch ];
+
+        # The compiled-in default $fpath and scripts dir (zshpaths.h) point at
+        # the mount. Build only: `make install` must still put the trees under
+        # $out, where the embed picks them up.
+        buildFlags = (old.buildFlags or [ ]) ++ mountDirs;
 
         # Runs after configure (Src/Makefile exists) and after zshBase's
         # config.modules edit.
@@ -193,7 +202,7 @@
           done
           echo "==> relink zsh against the rewritten objects"
           rm -f Src/zsh
-          make $makeFlags -j''${NIX_BUILD_CORES:-1}
+          make $makeFlags ${lib.escapeShellArgs mountDirs} -j''${NIX_BUILD_CORES:-1}
         '';
       });
       cosmoMod = import ./cosmo.nix { inherit unpins-lib; };

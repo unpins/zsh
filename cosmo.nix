@@ -101,6 +101,11 @@ let
     # content here is `-s`) and STRIPFLAGS so the binary keeps its symbol table;
     # the cosmo stdenv's fixup strips the final .exe after apelink.
     makeFlags = (oa.makeFlags or [ ]) ++ [ "EXELDFLAGS=" "LIBLDFLAGS=" ];
+    # Default $fpath and scripts dir at the mount, build only (as on native).
+    buildFlags = (oa.buildFlags or [ ]) ++ [
+      "fndir=/__unpins_zshruntime__/functions"
+      "scriptdir=/__unpins_zshruntime__/scripts"
+    ];
     installFlags = (oa.installFlags or [ ]) ++ [ "STRIPFLAGS=" ];
 
     # gcc-14 under -std=gnu23 (cosmocc default) makes an implicit function
