@@ -94,13 +94,14 @@
           # VFS sysroot, so the probe sees only VFS paths plus the musl
           # /usr/include fallback list — none exist as files in the sandbox — and
           # aborts "SIGNAL/ERROR MACROS NOT FOUND". Pre-seed both cache vars with
-          # musl's real bits/{signal,errno}.h (the path a non-engine CPP would
-          # have resolved to). Linux-only: darwin's engine uses the host SDK (real
-          # headers on disk), Windows is cosmo.nix.
+          # musl's real bits/{signal,errno}.h, from nix-lib's header-only install
+          # (the musl package would bootstrap the target gcc on a cross).
+          # Linux-only: darwin's engine uses the host SDK (real headers on disk),
+          # Windows is cosmo.nix.
           preConfigure = (o.preConfigure or "")
             + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-            export zsh_cv_path_signal_h=${pkgs.lib.getDev p.musl}/include/bits/signal.h
-            export zsh_cv_path_errno_h=${pkgs.lib.getDev p.musl}/include/bits/errno.h
+            export zsh_cv_path_signal_h=${p.unpinMuslHeaders}/include/bits/signal.h
+            export zsh_cv_path_errno_h=${p.unpinMuslHeaders}/include/bits/errno.h
           '';
 
           # Registering a linked-in module's dependencies is what keeps
